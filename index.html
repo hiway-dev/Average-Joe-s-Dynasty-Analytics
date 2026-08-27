@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Average Joe's Dynasty — Salary History</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<script src="data/combined.js"></script>
+<style>
+  :root { --bg:#0f1420; --card:#1a2233; --text:#e8ecf4; --muted:#8b98b3; --accent:#4da3ff; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: "Segoe UI", system-ui, sans-serif; background:var(--bg); color:var(--text); }
+  header { padding:24px 32px 8px; }
+  header h1 { margin:0 0 4px; font-size:26px; }
+  header p { margin:0; color:var(--muted); }
+  .controls { display:flex; gap:16px; align-items:center; flex-wrap:wrap; padding:16px 32px; }
+  .toggle { display:flex; border:1px solid #2c3a55; border-radius:8px; overflow:hidden; }
+  .toggle button { background:none; border:none; color:var(--muted); padding:8px 16px; cursor:pointer; font-size:14px; }
+  .toggle button.active { background:var(--accent); color:#08111f; font-weight:600; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; padding:0 32px 32px; }
+  .card { background:var(--card); border-radius:12px; padding:16px; }
+  .card.wide { grid-column:1 / -1; }
+  .card h2 { margin:0 0 4px; font-size:17px; }
+  .card .sub { margin:0 0 10px; color:var(--muted); font-size:13px; }
+  .plot { width:100%; height:420px; }
+  #playerSearch { width:100%; padding:9px 12px; border-radius:8px; border:1px solid #2c3a55; background:#111827; color:var(--text); font-size:14px; }
+  #suggestions { position:relative; }
+  #suggestList { position:absolute; z-index:10; left:0; right:0; background:#111827; border:1px solid #2c3a55; border-radius:8px; max-height:240px; overflow:auto; display:none; }
+  #suggestList div { padding:8px 12px; cursor:pointer; font-size:14px; }
+  #suggestList div:hover { background:#22304a; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+  .chip { background:#22304a; border-radius:14px; padding:4px 10px; font-size:13px; cursor:pointer; }
+  .chip:hover { background:#3a2a2a; text-decoration:line-through; }
+  select { padding:8px 12px; border-radius:8px; border:1px solid #2c3a55; background:#111827; color:var(--text); font-size:14px; }
+  @media (max-width: 1100px) { .grid { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Average Joe's Dynasty — Salary History</h1>
+  <p>2009 – 2026 · 12 franchises · salary cap grew $30 → $54 → $200 → $205</p>
+</header>
+
+<div class="controls">
+  <span style="color:var(--muted);font-size:14px">Salary scale:</span>
+  <div class="toggle" id="modeToggle">
+    <button data-mode="raw" class="active">Raw $</button>
+    <button data-mode="pct">% of cap</button>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card wide">
+    <h2>Player salary evolution</h2>
+    <p class="sub">Search and add players to compare their salaries across seasons.</p>
+    <div id="suggestions">
+      <input id="playerSearch" placeholder="Type a player name, e.g. Mahomes..." autocomplete="off">
+      <div id="suggestList"></div>
+    </div>
+    <div class="chips" id="chips"></div>
+    <div id="playerChart" class="plot" style="height:460px"></div>
+  </div>
+
+  <div class="card">
+    <h2>Team payroll by season</h2>
+    <p class="sub">Total roster salary per franchise (dashed line = cap). Click legend to isolate.</p>
+    <div id="teamChart" class="plot"></div>
+  </div>
+
+  <div class="card">
+    <h2>Positional spending share</h2>
+    <p class="sub">League-wide share of total salary by position group.</p>
+    <div id="posChart" class="plot"></div>
+  </div>
+
+  <div class="card">
+    <h2>Top 15 salaries — <select id="yearSel"></select></h2>
+    <p class="sub">Highest-paid players in the selected season.</p>
+    <div id="topChart" class="plot"></div>
+  </div>
+
+  <div class="card wide">
+    <h2>Team spending by position</h2>
+    <p class="sub">How each franchise allocated salary across positions over the years.</p>
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+      <div class="toggle" id="tpToggle">
+        <button data-view="team" class="active">By team</button>
+        <button data-view="pos">By position</button>
+      </div>
+      <select id="tpTeamSel"></select>
+      <select id="tpPosSel" style="display:none"></select>
+    </div>
+    <div id="teamPosChart" class="plot" style="height:460px"></div>
+  </div>
+
+  <div class="card">
+    <h2>Salary inflation</h2>
+    <p class="sub">Average and max player salary per season (as % of cap).</p>
+    <div id="inflationChart" class="plot"></div>
+  </div>
+</div>
+
+<script>
+const D = window.LEAGUE_DATA;
+const YEARS = D.years;
+const CAPS = D.caps;
+const FR = D.franchises;
+let mode = "raw";
+
+const layoutBase = {
+  paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
+  font: { color: "#c7d2e8", size: 12 },
+  margin: { l: 55, r: 20, t: 10, b: 40 },
+  xaxis: { gridcolor: "#24304555", dtick: 1 },
+  yaxis: { gridcolor: "#2a3a5555" },
+  legend: { orientation: "h", y: -0.18 },
+  hovermode: "closest",
+};
+const cfg = { displayModeBar: false, responsive: true };
+
+const val = (salary, year) => mode === "pct" ? salary / CAPS[year] * 100 : salary;
+const yTitle = () => mode === "pct" ? "% of cap" : "Salary ($)";
+const fmt = () => mode === "pct" ? ".1f" : ".2f";
+const suffix = () => mode === "pct" ? "%" : "";
+
+// --- indices ---
+const byPlayer = {};  // pid -> {name, pos, rows: {year: {s, f, cy}}}
+const teamTotals = {}; // fid -> {year: total}
+const posTotals = {};  // pg -> {year: total}
+const yearTotals = {};
+const teamPosTotals = {}; // fid -> pg -> {year: total}
+for (const r of D.rows) {
+  (((teamPosTotals[r.f] ??= {})[r.pg] ??= {})[r.y] ??= 0);
+  teamPosTotals[r.f][r.pg][r.y] += r.s;
+  (byPlayer[r.pid] ??= { name: r.n, pos: r.pos, rows: {} }).rows[r.y] = r;
+  ((teamTotals[r.f] ??= {})[r.y] ??= 0);
+  teamTotals[r.f][r.y] += r.s;
+  ((posTotals[r.pg] ??= {})[r.y] ??= 0);
+  posTotals[r.pg][r.y] += r.s;
+  (yearTotals[r.y] ??= 0);
+  yearTotals[r.y] += r.s;
+}
+
+// ================= Player evolution =================
+let selected = [];
+const searchIndex = Object.entries(byPlayer)
+  .map(([pid, p]) => ({ pid, name: p.name, pos: p.pos, seasons: Object.keys(p.rows).length }))
+  .sort((a, b) => b.seasons - a.seasons);
+
+const input = document.getElementById("playerSearch");
+const list = document.getElementById("suggestList");
+input.addEventListener("input", () => {
+  const q = input.value.trim().toLowerCase();
+  if (q.length < 2) { list.style.display = "none"; return; }
+  const hits = searchIndex.filter(p => p.name.toLowerCase().includes(q)).slice(0, 12);
+  list.innerHTML = hits.map(h =>
+    `<div data-pid="${h.pid}">${h.name} <span style="color:#8b98b3">(${h.pos}, ${h.seasons} seasons)</span></div>`).join("");
+  list.style.display = hits.length ? "block" : "none";
+});
+list.addEventListener("click", e => {
+  const pid = e.target.closest("div[data-pid]")?.dataset.pid;
+  if (pid && !selected.includes(pid)) { selected.push(pid); renderChips(); drawPlayerChart(); }
+  input.value = ""; list.style.display = "none";
+});
+document.addEventListener("click", e => { if (!e.target.closest("#suggestions")) list.style.display = "none"; });
+
+function renderChips() {
+  document.getElementById("chips").innerHTML = selected.map(pid =>
+    `<span class="chip" data-pid="${pid}" title="Remove">${byPlayer[pid].name} ✕</span>`).join("");
+}
+document.getElementById("chips").addEventListener("click", e => {
+  const pid = e.target.dataset.pid;
+  if (pid) { selected = selected.filter(x => x !== pid); renderChips(); drawPlayerChart(); }
+});
+
+function drawPlayerChart() {
+  let pids = selected;
+  if (!pids.length) {
+    // Default: players with the highest career total salary
+    pids = searchIndex
+      .map(p => ({ pid: p.pid, tot: Object.values(byPlayer[p.pid].rows).reduce((a, r) => a + val(r.s, r.y), 0) }))
+      .sort((a, b) => b.tot - a.tot).slice(0, 6).map(p => p.pid);
+  }
+  const traces = pids.map(pid => {
+    const p = byPlayer[pid];
+    const ys = YEARS.filter(y => p.rows[y]);
+    return {
+      x: ys, y: ys.map(y => val(p.rows[y].s, y)),
+      mode: "lines+markers", name: `${p.name} (${p.pos})`,
+      customdata: ys.map(y => [FR[p.rows[y].f]?.current ?? p.rows[y].f, p.rows[y].cy || "—"]),
+      hovertemplate: `%{x}: %{y:${fmt()}}${suffix()}<br>Team: %{customdata[0]}<br>Contract yrs left: %{customdata[1]}<extra>${p.name}</extra>`,
+    };
+  });
+  Plotly.react("playerChart", traces, { ...layoutBase, yaxis: { ...layoutBase.yaxis, title: yTitle(), rangemode: "tozero" } }, cfg);
+}
+
+// ================= Team payroll =================
+function drawTeamChart() {
+  const traces = Object.keys(FR).map(fid => ({
+    x: YEARS, y: YEARS.map(y => teamTotals[fid]?.[y] != null ? val(teamTotals[fid][y], y) : null),
+    mode: "lines+markers", name: FR[fid].current,
+    hovertemplate: `%{x}: %{y:${fmt()}}${suffix()}<extra>${FR[fid].current}</extra>`,
+  }));
+  traces.push({
+    x: YEARS, y: YEARS.map(y => mode === "pct" ? 100 : CAPS[y]),
+    mode: "lines", name: "Salary cap", line: { dash: "dash", color: "#ff6b6b", width: 2 },
+    hovertemplate: `Cap %{x}: %{y:${fmt()}}${suffix()}<extra></extra>`,
+  });
+  Plotly.react("teamChart", traces, { ...layoutBase, yaxis: { ...layoutBase.yaxis, title: yTitle(), rangemode: "tozero" }, legend: { orientation: "h", y: -0.22, font: { size: 10 } } }, cfg);
+}
+
+// ================= Positional share =================
+function drawPosChart() {
+  const order = ["QB", "RB", "WR", "TE", "DL", "LB", "DB", "Other"].filter(pg => posTotals[pg]);
+  const traces = order.map(pg => ({
+    x: YEARS, y: YEARS.map(y => (posTotals[pg][y] ?? 0) / yearTotals[y] * 100),
+    stackgroup: "one", name: pg, mode: "lines",
+    hovertemplate: `%{x} ${pg}: %{y:.1f}%<extra></extra>`,
+  }));
+  Plotly.react("posChart", traces, { ...layoutBase, yaxis: { ...layoutBase.yaxis, title: "% of league salary", range: [0, 100] } }, cfg);
+}
+
+// ================= Top salaries =================
+const yearSel = document.getElementById("yearSel");
+yearSel.innerHTML = YEARS.map(y => `<option ${y === YEARS[YEARS.length - 1] ? "selected" : ""}>${y}</option>`).join("");
+yearSel.addEventListener("change", drawTopChart);
+
+function drawTopChart() {
+  const y = +yearSel.value;
+  const rows = D.rows.filter(r => r.y === y).sort((a, b) => b.s - a.s).slice(0, 15).reverse();
+  Plotly.react("topChart", [{
+    x: rows.map(r => val(r.s, y)), y: rows.map(r => `${r.n} (${r.pos})`),
+    type: "bar", orientation: "h", marker: { color: "#4da3ff" },
+    customdata: rows.map(r => FR[r.f]?.current ?? r.f),
+    hovertemplate: `%{y}: %{x:${fmt()}}${suffix()}<br>%{customdata}<extra></extra>`,
+  }], { ...layoutBase, margin: { ...layoutBase.margin, l: 190 }, xaxis: { ...layoutBase.xaxis, title: yTitle(), dtick: undefined }, yaxis: { gridcolor: "rgba(0,0,0,0)", tickfont: { size: 11 } } }, cfg);
+}
+
+// ================= Team spending by position =================
+const POS_ORDER = ["QB", "RB", "WR", "TE", "DL", "LB", "DB", "Other"];
+let tpView = "team";
+const tpTeamSel = document.getElementById("tpTeamSel");
+const tpPosSel = document.getElementById("tpPosSel");
+tpTeamSel.innerHTML = Object.keys(FR).map(fid => `<option value="${fid}">${FR[fid].current}</option>`).join("");
+tpPosSel.innerHTML = POS_ORDER.filter(pg => posTotals[pg]).map(pg => `<option>${pg}</option>`).join("");
+tpTeamSel.addEventListener("change", drawTeamPosChart);
+tpPosSel.addEventListener("change", drawTeamPosChart);
+document.getElementById("tpToggle").addEventListener("click", e => {
+  const btn = e.target.closest("button");
+  if (!btn) return;
+  tpView = btn.dataset.view;
+  document.querySelectorAll("#tpToggle button").forEach(b => b.classList.toggle("active", b === btn));
+  tpTeamSel.style.display = tpView === "team" ? "" : "none";
+  tpPosSel.style.display = tpView === "pos" ? "" : "none";
+  drawTeamPosChart();
+});
+
+function drawTeamPosChart() {
+  let traces, layout;
+  if (tpView === "team") {
+    const fid = tpTeamSel.value;
+    const tp = teamPosTotals[fid] ?? {};
+    traces = POS_ORDER.filter(pg => tp[pg]).map(pg => ({
+      x: YEARS, y: YEARS.map(y => tp[pg][y] != null ? val(tp[pg][y], y) : 0),
+      stackgroup: "one", mode: "lines", name: pg,
+      hovertemplate: `%{x} ${pg}: %{y:${fmt()}}${suffix()}<extra>${FR[fid].current}</extra>`,
+    }));
+    layout = { ...layoutBase, yaxis: { ...layoutBase.yaxis, title: yTitle(), rangemode: "tozero" } };
+    if (mode === "pct") {
+      traces.push({
+        x: YEARS, y: YEARS.map(() => 100), mode: "lines", name: "Cap",
+        line: { dash: "dash", color: "#ff6b6b", width: 2 }, hoverinfo: "skip",
+      });
+    }
+  } else {
+    const pg = tpPosSel.value;
+    traces = Object.keys(FR).map(fid => {
+      const t = teamPosTotals[fid]?.[pg] ?? {};
+      return {
+        x: YEARS, y: YEARS.map(y => teamTotals[fid]?.[y] != null ? val(t[y] ?? 0, y) : null),
+        mode: "lines+markers", name: FR[fid].current,
+        hovertemplate: `%{x}: %{y:${fmt()}}${suffix()}<extra>${FR[fid].current} ${pg}</extra>`,
+      };
+    });
+    const lgAvg = YEARS.map(y => val((posTotals[pg]?.[y] ?? 0) / Object.keys(FR).length, y));
+    traces.push({
+      x: YEARS, y: lgAvg, mode: "lines", name: "League avg",
+      line: { dash: "dash", color: "#ffffff", width: 3 },
+      hovertemplate: `%{x} avg: %{y:${fmt()}}${suffix()}<extra>League avg ${pg}</extra>`,
+    });
+    layout = { ...layoutBase, yaxis: { ...layoutBase.yaxis, title: yTitle(), rangemode: "tozero" }, legend: { orientation: "h", y: -0.18, font: { size: 10 } } };
+  }
+  Plotly.react("teamPosChart", traces, layout, cfg);
+}
+
+// ================= Inflation =================
+function drawInflation() {
+  const avg = YEARS.map(y => { const rs = D.rows.filter(r => r.y === y); return rs.reduce((a, r) => a + r.s, 0) / rs.length / CAPS[y] * 100; });
+  const max = YEARS.map(y => Math.max(...D.rows.filter(r => r.y === y).map(r => r.s)) / CAPS[y] * 100);
+  Plotly.react("inflationChart", [
+    { x: YEARS, y: avg, mode: "lines+markers", name: "Avg salary", hovertemplate: "%{x}: %{y:.2f}%<extra>Avg</extra>" },
+    { x: YEARS, y: max, mode: "lines+markers", name: "Max salary", hovertemplate: "%{x}: %{y:.2f}%<extra>Max</extra>" },
+  ], { ...layoutBase, yaxis: { ...layoutBase.yaxis, title: "% of cap", rangemode: "tozero" } }, cfg);
+}
+
+// ================= Mode toggle =================
+document.getElementById("modeToggle").addEventListener("click", e => {
+  const btn = e.target.closest("button");
+  if (!btn) return;
+  mode = btn.dataset.mode;
+  document.querySelectorAll("#modeToggle button").forEach(b => b.classList.toggle("active", b === btn));
+  drawPlayerChart(); drawTeamChart(); drawTopChart(); drawTeamPosChart();
+});
+
+drawPlayerChart(); drawTeamChart(); drawPosChart(); drawTopChart(); drawTeamPosChart(); drawInflation();
+</script>
+</body>
+</html>
