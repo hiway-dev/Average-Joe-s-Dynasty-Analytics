@@ -37,11 +37,26 @@ def main():
         ps = json.load(open(f)).get("playerScores", {})
         points[y] = {p["id"]: float(p.get("score") or 0) for p in as_list(ps.get("playerScore"))}
 
-    # Weekly start/bench efficiency per franchise per year
-    eff = {}  # year -> {fid: {"act": actual_pts, "opt": optimal_pts}}
+    # Weekly start/bench efficiency per franchise per year,
+    # plus starter-only points per player per year
+    eff = {}         # year -> {fid: {"act": actual_pts, "opt": optimal_pts}}
+    starter_pts = {}  # year -> {pid: pts scored in weeks started}
+    starter_wks = {}  # year -> {pid: number of weeks started}
     for y in YEARS:
         for f in sorted(DATA.glob(f"{y}_weeklyResults_*.json")):
             wr = json.load(open(f)).get("weeklyResults", {})
+            for fr in as_list(wr.get("franchise")):
+                for p in as_list(fr.get("player")):
+                    if p.get("status") != "starter":
+                        continue
+                    try:
+                        sc = float(p.get("score") or 0)
+                    except ValueError:
+                        sc = 0.0
+                    sp = starter_pts.setdefault(y, {})
+                    sp[p["id"]] = sp.get(p["id"], 0.0) + sc
+                    sw = starter_wks.setdefault(y, {})
+                    sw[p["id"]] = sw.get(p["id"], 0) + 1
             for fr in as_list(wr.get("franchise")):
                 try:
                     act, opt = float(fr.get("score") or 0), float(fr.get("opt_pts") or 0)
@@ -86,6 +101,8 @@ def main():
                     "ci": p.get("contractInfo", ""),
                     "st": p.get("status", ""),
                     "pts": round(points.get(y, {}).get(p["id"], 0), 2),
+                    "spts": round(starter_pts.get(y, {}).get(p["id"], 0), 2),
+                    "sw": starter_wks.get(y, {}).get(p["id"], 0),
                 })
 
     out = {
