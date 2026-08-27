@@ -101,6 +101,24 @@
     <p class="sub">Average and max player salary per season (as % of cap).</p>
     <div id="inflationChart" class="plot"></div>
   </div>
+
+  <div class="card wide">
+    <h2>Value map: salary vs points — <select id="valYearSel"></select></h2>
+    <p class="sub">Every rostered player: what they cost vs what they scored. Top-left = bargains, bottom-right = busts. Points are full-season totals credited to the end-of-year roster.</p>
+    <div id="valueChart" class="plot" style="height:500px"></div>
+  </div>
+
+  <div class="card">
+    <h2>Points per dollar by position</h2>
+    <p class="sub">League-wide fantasy points scored per salary dollar spent, by position group.</p>
+    <div id="ppdChart" class="plot"></div>
+  </div>
+
+  <div class="card">
+    <h2>Lineup efficiency</h2>
+    <p class="sub">Actual starting-lineup points as % of the optimal lineup (start/bench decisions). 100% = perfect starts every week.</p>
+    <div id="effChart" class="plot"></div>
+  </div>
 </div>
 
 <script>
@@ -317,9 +335,68 @@ function drawInflation() {
   ], { ...layoutBase, yaxis: { ...layoutBase.yaxis, title: "% of cap", rangemode: "tozero" } }, cfg);
 }
 
+// ================= Value map: salary vs points =================
+const PG_COLORS = { QB: "#e05563", RB: "#4da3ff", WR: "#53c78f", TE: "#e8b23d", DL: "#a07be0", LB: "#e07bb7", DB: "#5bc8d6", Other: "#8b98b3" };
+const valYearSel = document.getElementById("valYearSel");
+function fillValYearSel() {
+  const yrs = YRS().filter(y => D.rows.some(r => r.y === y && r.pts > 0));
+  const keep = yrs.includes(+valYearSel.value) ? +valYearSel.value : yrs[yrs.length - 1];
+  valYearSel.innerHTML = yrs.map(y => `<option ${y === keep ? "selected" : ""}>${y}</option>`).join("");
+}
+valYearSel.addEventListener("change", drawValueChart);
+
+function drawValueChart() {
+  const y = +valYearSel.value;
+  const rows = D.rows.filter(r => r.y === y && r.s > 0);
+  const traces = Object.keys(PG_COLORS).filter(pg => rows.some(r => r.pg === pg)).map(pg => {
+    const rs = rows.filter(r => r.pg === pg);
+    return {
+      x: rs.map(r => val(r.s, y)), y: rs.map(r => r.pts),
+      mode: "markers", name: pg, marker: { color: PG_COLORS[pg], size: 7, opacity: 0.75 },
+      customdata: rs.map(r => [r.n, FR[r.f]?.current ?? r.f, r.s ? (r.pts / r.s).toFixed(1) : "—"]),
+      hovertemplate: `%{customdata[0]}<br>Salary: %{x:${fmt()}}${suffix()} · Points: %{y:.1f}<br>%{customdata[2]} pts/$ · %{customdata[1]}<extra>${pg}</extra>`,
+    };
+  });
+  Plotly.react("valueChart", traces, { ...layoutBase,
+    xaxis: { ...layoutBase.xaxis, title: yTitle(), dtick: undefined, rangemode: "tozero" },
+    yaxis: { ...layoutBase.yaxis, title: "Fantasy points", rangemode: "tozero" } }, cfg);
+}
+
+// ================= Points per dollar by position =================
+function drawPpdChart() {
+  const yrs = YRS().filter(y => D.rows.some(r => r.y === y && r.pts > 0));
+  const traces = Object.keys(PG_COLORS).filter(pg => pg !== "Other").map(pg => ({
+    x: yrs,
+    y: yrs.map(y => {
+      const rs = D.rows.filter(r => r.y === y && r.pg === pg && r.s > 0);
+      const sal = rs.reduce((a, r) => a + r.s, 0);
+      return sal > 0 ? rs.reduce((a, r) => a + r.pts, 0) / sal : null;
+    }),
+    mode: "lines+markers", name: pg, line: { color: PG_COLORS[pg] },
+    hovertemplate: `%{x} ${pg}: %{y:.1f} pts/$<extra></extra>`,
+  }));
+  Plotly.react("ppdChart", traces, { ...layoutBase, yaxis: { ...layoutBase.yaxis, title: "Points per $", rangemode: "tozero" } }, cfg);
+}
+
+// ================= Lineup efficiency =================
+function drawEffChart() {
+  const yrs = YRS().filter(y => D.efficiency[y]);
+  const traces = Object.keys(FR).map(fid => ({
+    x: yrs,
+    y: yrs.map(y => {
+      const e = D.efficiency[y]?.[fid];
+      return e && e.opt > 0 ? e.act / e.opt * 100 : null;
+    }),
+    mode: "lines+markers", name: FR[fid].current,
+    hovertemplate: `%{x}: %{y:.1f}% of optimal<extra>${FR[fid].current}</extra>`,
+  }));
+  Plotly.react("effChart", traces, { ...layoutBase, yaxis: { ...layoutBase.yaxis, title: "% of optimal lineup" }, legend: { orientation: "h", y: -0.22, font: { size: 10 } } }, cfg);
+}
+
 // ================= Global controls =================
 function redrawAll() {
   drawPlayerChart(); drawTeamChart(); drawPosChart(); drawTopChart(); drawTeamPosChart(); drawInflation();
+  fillValYearSel(); drawValueChart(); drawPpdChart(); drawEffChart();
 }
 
 document.getElementById("modeToggle").addEventListener("click", e => {

@@ -36,21 +36,30 @@ def fetch(url: str):
         return json.loads(r.read().decode("utf-8"))
 
 
+def fetch_one(url: str, out: Path, label: str):
+    if out.exists():
+        return
+    try:
+        data = fetch(url)
+        out.write_text(json.dumps(data), encoding="utf-8")
+        print(f"{label}: ok")
+    except Exception as e:
+        print(f"{label}: FAILED {e}")
+    time.sleep(1.2)
+
+
 def fetch_year(year: int, host: str, lid: str):
     base = f"https://{host}.myfantasyleague.com/{year}/export"
     for etype, extra in [("league", ""), ("rosters", ""), ("players", "&DETAILS=1"),
                          ("salaryAdjustments", ""), ("standings", "")]:
-        out = DATA / f"{year}_{etype}.json"
-        if out.exists():
-            continue
-        url = f"{base}?TYPE={etype}&L={lid}&JSON=1{extra}"
-        try:
-            data = fetch(url)
-            out.write_text(json.dumps(data), encoding="utf-8")
-            print(f"{year} {etype}: ok")
-        except Exception as e:
-            print(f"{year} {etype}: FAILED {e}")
-        time.sleep(1.2)
+        fetch_one(f"{base}?TYPE={etype}&L={lid}&JSON=1{extra}",
+                  DATA / f"{year}_{etype}.json", f"{year} {etype}")
+    fetch_one(f"{base}?TYPE=playerScores&L={lid}&W=YTD&JSON=1",
+              DATA / f"{year}_playerScores.json", f"{year} playerScores")
+    # Weekly lineups (regular season weeks) for start/bench efficiency
+    for w in range(1, 15):
+        fetch_one(f"{base}?TYPE=weeklyResults&L={lid}&W={w}&JSON=1",
+                  DATA / f"{year}_weeklyResults_{w:02d}.json", f"{year} weeklyResults w{w}")
 
 
 if __name__ == "__main__":

@@ -28,6 +28,31 @@ def main():
                 "team": p.get("team", ""),
             }
 
+    # YTD fantasy points per player per year
+    points = {}  # year -> {pid: pts}
+    for y in YEARS:
+        f = DATA / f"{y}_playerScores.json"
+        if not f.exists():
+            continue
+        ps = json.load(open(f)).get("playerScores", {})
+        points[y] = {p["id"]: float(p.get("score") or 0) for p in as_list(ps.get("playerScore"))}
+
+    # Weekly start/bench efficiency per franchise per year
+    eff = {}  # year -> {fid: {"act": actual_pts, "opt": optimal_pts}}
+    for y in YEARS:
+        for f in sorted(DATA.glob(f"{y}_weeklyResults_*.json")):
+            wr = json.load(open(f)).get("weeklyResults", {})
+            for fr in as_list(wr.get("franchise")):
+                try:
+                    act, opt = float(fr.get("score") or 0), float(fr.get("opt_pts") or 0)
+                except ValueError:
+                    continue
+                if opt <= 0:
+                    continue
+                e = eff.setdefault(y, {}).setdefault(fr["id"], {"act": 0.0, "opt": 0.0})
+                e["act"] += act
+                e["opt"] += opt
+
     franchise_names = {}   # year -> {fid: name}
     current_names = {}     # fid -> latest name
     caps = {}
@@ -60,6 +85,7 @@ def main():
                     "cy": p.get("contractYear", ""),
                     "ci": p.get("contractInfo", ""),
                     "st": p.get("status", ""),
+                    "pts": round(points.get(y, {}).get(p["id"], 0), 2),
                 })
 
     out = {
@@ -69,6 +95,9 @@ def main():
                              "byYear": {y: franchise_names[y].get(fid, "") for y in YEARS}}
                        for fid in sorted(current_names)},
         "rows": rows,
+        "efficiency": {y: {fid: {"act": round(e["act"], 1), "opt": round(e["opt"], 1)}
+                           for fid, e in fids.items()}
+                       for y, fids in eff.items()},
     }
     (DATA / "combined.json").write_text(json.dumps(out), encoding="utf-8")
     print(f"rows: {len(rows)}, players: {len({r['pid'] for r in rows})}")
