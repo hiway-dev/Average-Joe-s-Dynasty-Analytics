@@ -46,6 +46,10 @@
     <button data-mode="raw" class="active">Raw $</button>
     <button data-mode="pct">% of cap</button>
   </div>
+  <span style="color:var(--muted);font-size:14px">Years:</span>
+  <select id="yearFrom"></select>
+  <span style="color:var(--muted)">–</span>
+  <select id="yearTo"></select>
 </div>
 
 <div class="grid">
@@ -105,6 +109,8 @@ const YEARS = D.years;
 const CAPS = D.caps;
 const FR = D.franchises;
 let mode = "raw";
+let yearFrom = YEARS[0], yearTo = YEARS[YEARS.length - 1];
+const YRS = () => YEARS.filter(y => y >= yearFrom && y <= yearTo);
 
 const layoutBase = {
   paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
@@ -175,14 +181,14 @@ document.getElementById("chips").addEventListener("click", e => {
 function drawPlayerChart() {
   let pids = selected;
   if (!pids.length) {
-    // Default: players with the highest career total salary
+    // Default: players with the highest career total salary (within selected years)
     pids = searchIndex
-      .map(p => ({ pid: p.pid, tot: Object.values(byPlayer[p.pid].rows).reduce((a, r) => a + val(r.s, r.y), 0) }))
+      .map(p => ({ pid: p.pid, tot: Object.values(byPlayer[p.pid].rows).filter(r => r.y >= yearFrom && r.y <= yearTo).reduce((a, r) => a + val(r.s, r.y), 0) }))
       .sort((a, b) => b.tot - a.tot).slice(0, 6).map(p => p.pid);
   }
   const traces = pids.map(pid => {
     const p = byPlayer[pid];
-    const ys = YEARS.filter(y => p.rows[y]);
+    const ys = YRS().filter(y => p.rows[y]);
     return {
       x: ys, y: ys.map(y => val(p.rows[y].s, y)),
       mode: "lines+markers", name: `${p.name} (${p.pos})`,
@@ -195,13 +201,14 @@ function drawPlayerChart() {
 
 // ================= Team payroll =================
 function drawTeamChart() {
+  const yrs = YRS();
   const traces = Object.keys(FR).map(fid => ({
-    x: YEARS, y: YEARS.map(y => teamTotals[fid]?.[y] != null ? val(teamTotals[fid][y], y) : null),
+    x: yrs, y: yrs.map(y => teamTotals[fid]?.[y] != null ? val(teamTotals[fid][y], y) : null),
     mode: "lines+markers", name: FR[fid].current,
     hovertemplate: `%{x}: %{y:${fmt()}}${suffix()}<extra>${FR[fid].current}</extra>`,
   }));
   traces.push({
-    x: YEARS, y: YEARS.map(y => mode === "pct" ? 100 : CAPS[y]),
+    x: yrs, y: yrs.map(y => mode === "pct" ? 100 : CAPS[y]),
     mode: "lines", name: "Salary cap", line: { dash: "dash", color: "#ff6b6b", width: 2 },
     hovertemplate: `Cap %{x}: %{y:${fmt()}}${suffix()}<extra></extra>`,
   });
@@ -210,9 +217,10 @@ function drawTeamChart() {
 
 // ================= Positional share =================
 function drawPosChart() {
+  const yrs = YRS();
   const order = ["QB", "RB", "WR", "TE", "DL", "LB", "DB", "Other"].filter(pg => posTotals[pg]);
   const traces = order.map(pg => ({
-    x: YEARS, y: YEARS.map(y => (posTotals[pg][y] ?? 0) / yearTotals[y] * 100),
+    x: yrs, y: yrs.map(y => (posTotals[pg][y] ?? 0) / yearTotals[y] * 100),
     stackgroup: "one", name: pg, mode: "lines",
     hovertemplate: `%{x} ${pg}: %{y:.1f}%<extra></extra>`,
   }));
@@ -221,7 +229,12 @@ function drawPosChart() {
 
 // ================= Top salaries =================
 const yearSel = document.getElementById("yearSel");
-yearSel.innerHTML = YEARS.map(y => `<option ${y === YEARS[YEARS.length - 1] ? "selected" : ""}>${y}</option>`).join("");
+function fillTopYearSel() {
+  const yrs = YRS();
+  const keep = yrs.includes(+yearSel.value) ? +yearSel.value : yrs[yrs.length - 1];
+  yearSel.innerHTML = yrs.map(y => `<option ${y === keep ? "selected" : ""}>${y}</option>`).join("");
+}
+fillTopYearSel();
 yearSel.addEventListener("change", drawTopChart);
 
 function drawTopChart() {
@@ -255,19 +268,20 @@ document.getElementById("tpToggle").addEventListener("click", e => {
 });
 
 function drawTeamPosChart() {
+  const yrs = YRS();
   let traces, layout;
   if (tpView === "team") {
     const fid = tpTeamSel.value;
     const tp = teamPosTotals[fid] ?? {};
     traces = POS_ORDER.filter(pg => tp[pg]).map(pg => ({
-      x: YEARS, y: YEARS.map(y => tp[pg][y] != null ? val(tp[pg][y], y) : 0),
+      x: yrs, y: yrs.map(y => tp[pg][y] != null ? val(tp[pg][y], y) : 0),
       stackgroup: "one", mode: "lines", name: pg,
       hovertemplate: `%{x} ${pg}: %{y:${fmt()}}${suffix()}<extra>${FR[fid].current}</extra>`,
     }));
     layout = { ...layoutBase, yaxis: { ...layoutBase.yaxis, title: yTitle(), rangemode: "tozero" } };
     if (mode === "pct") {
       traces.push({
-        x: YEARS, y: YEARS.map(() => 100), mode: "lines", name: "Cap",
+        x: yrs, y: yrs.map(() => 100), mode: "lines", name: "Cap",
         line: { dash: "dash", color: "#ff6b6b", width: 2 }, hoverinfo: "skip",
       });
     }
@@ -276,14 +290,14 @@ function drawTeamPosChart() {
     traces = Object.keys(FR).map(fid => {
       const t = teamPosTotals[fid]?.[pg] ?? {};
       return {
-        x: YEARS, y: YEARS.map(y => teamTotals[fid]?.[y] != null ? val(t[y] ?? 0, y) : null),
+        x: yrs, y: yrs.map(y => teamTotals[fid]?.[y] != null ? val(t[y] ?? 0, y) : null),
         mode: "lines+markers", name: FR[fid].current,
         hovertemplate: `%{x}: %{y:${fmt()}}${suffix()}<extra>${FR[fid].current} ${pg}</extra>`,
       };
     });
-    const lgAvg = YEARS.map(y => val((posTotals[pg]?.[y] ?? 0) / Object.keys(FR).length, y));
+    const lgAvg = yrs.map(y => val((posTotals[pg]?.[y] ?? 0) / Object.keys(FR).length, y));
     traces.push({
-      x: YEARS, y: lgAvg, mode: "lines", name: "League avg",
+      x: yrs, y: lgAvg, mode: "lines", name: "League avg",
       line: { dash: "dash", color: "#ffffff", width: 3 },
       hovertemplate: `%{x} avg: %{y:${fmt()}}${suffix()}<extra>League avg ${pg}</extra>`,
     });
@@ -294,24 +308,45 @@ function drawTeamPosChart() {
 
 // ================= Inflation =================
 function drawInflation() {
-  const avg = YEARS.map(y => { const rs = D.rows.filter(r => r.y === y); return rs.reduce((a, r) => a + r.s, 0) / rs.length / CAPS[y] * 100; });
-  const max = YEARS.map(y => Math.max(...D.rows.filter(r => r.y === y).map(r => r.s)) / CAPS[y] * 100);
+  const yrs = YRS();
+  const avg = yrs.map(y => { const rs = D.rows.filter(r => r.y === y); return rs.reduce((a, r) => a + r.s, 0) / rs.length / CAPS[y] * 100; });
+  const max = yrs.map(y => Math.max(...D.rows.filter(r => r.y === y).map(r => r.s)) / CAPS[y] * 100);
   Plotly.react("inflationChart", [
-    { x: YEARS, y: avg, mode: "lines+markers", name: "Avg salary", hovertemplate: "%{x}: %{y:.2f}%<extra>Avg</extra>" },
-    { x: YEARS, y: max, mode: "lines+markers", name: "Max salary", hovertemplate: "%{x}: %{y:.2f}%<extra>Max</extra>" },
+    { x: yrs, y: avg, mode: "lines+markers", name: "Avg salary", hovertemplate: "%{x}: %{y:.2f}%<extra>Avg</extra>" },
+    { x: yrs, y: max, mode: "lines+markers", name: "Max salary", hovertemplate: "%{x}: %{y:.2f}%<extra>Max</extra>" },
   ], { ...layoutBase, yaxis: { ...layoutBase.yaxis, title: "% of cap", rangemode: "tozero" } }, cfg);
 }
 
-// ================= Mode toggle =================
+// ================= Global controls =================
+function redrawAll() {
+  drawPlayerChart(); drawTeamChart(); drawPosChart(); drawTopChart(); drawTeamPosChart(); drawInflation();
+}
+
 document.getElementById("modeToggle").addEventListener("click", e => {
   const btn = e.target.closest("button");
   if (!btn) return;
   mode = btn.dataset.mode;
   document.querySelectorAll("#modeToggle button").forEach(b => b.classList.toggle("active", b === btn));
-  drawPlayerChart(); drawTeamChart(); drawTopChart(); drawTeamPosChart();
+  redrawAll();
 });
 
-drawPlayerChart(); drawTeamChart(); drawPosChart(); drawTopChart(); drawTeamPosChart(); drawInflation();
+const fromSel = document.getElementById("yearFrom");
+const toSel = document.getElementById("yearTo");
+fromSel.innerHTML = YEARS.map(y => `<option ${y === yearFrom ? "selected" : ""}>${y}</option>`).join("");
+toSel.innerHTML = YEARS.map(y => `<option ${y === yearTo ? "selected" : ""}>${y}</option>`).join("");
+function onYearRangeChange() {
+  yearFrom = +fromSel.value; yearTo = +toSel.value;
+  if (yearFrom > yearTo) {  // keep the range valid by swapping
+    [yearFrom, yearTo] = [yearTo, yearFrom];
+    fromSel.value = yearFrom; toSel.value = yearTo;
+  }
+  fillTopYearSel();
+  redrawAll();
+}
+fromSel.addEventListener("change", onYearRangeChange);
+toSel.addEventListener("change", onYearRangeChange);
+
+redrawAll();
 </script>
 </body>
 </html>
