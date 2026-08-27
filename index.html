@@ -54,6 +54,7 @@
   <div class="toggle" id="ptsToggle">
     <button data-basis="all" class="active">All points</button>
     <button data-basis="starter">Starters only</button>
+    <button data-basis="perstart">Per start</button>
   </div>
 </div>
 
@@ -109,13 +110,13 @@
 
   <div class="card wide">
     <h2>Value map: salary vs points — <select id="valYearSel"></select></h2>
-    <p class="sub">Every rostered player: what they cost vs what they scored. Top-left = bargains, bottom-right = busts. Points are credited to the end-of-year roster; use the "Points basis" toggle above to count only weeks a player was actually started.</p>
+    <p class="sub">Every rostered player: what they cost vs what they scored. Top-left = bargains, bottom-right = busts. Points are credited to the end-of-year roster. "Per start" rates players only on weeks they were deployed — the fairest was-the-contract-good-on-the-field view (injury-neutral); a big gap between "All points" and "Starters only" at high salary flags healthy production left on the bench.</p>
     <div id="valueChart" class="plot" style="height:500px"></div>
   </div>
 
   <div class="card">
     <h2>Points per dollar by position</h2>
-    <p class="sub">League-wide fantasy points scored per salary dollar spent, by position group.</p>
+    <p class="sub">League-wide fantasy points scored per salary dollar spent, by position group. In "Starters only" / "Per start" modes, only production and salary of players who actually started counts.</p>
     <div id="ppdChart" class="plot"></div>
   </div>
 
@@ -135,8 +136,8 @@ let mode = "raw";
 let yearFrom = YEARS[0], yearTo = YEARS[YEARS.length - 1];
 const YRS = () => YEARS.filter(y => y >= yearFrom && y <= yearTo);
 let ptsBasis = "all";
-const ptsOf = r => ptsBasis === "starter" ? r.spts : r.pts;
-const ptsLabel = () => ptsBasis === "starter" ? "Starter points" : "Fantasy points";
+const ptsOf = r => ptsBasis === "all" ? r.pts : ptsBasis === "starter" ? r.spts : (r.sw > 0 ? r.spts / r.sw : 0);
+const ptsLabel = () => ptsBasis === "all" ? "Fantasy points" : ptsBasis === "starter" ? "Starter points" : "Points per week started";
 
 const layoutBase = {
   paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
@@ -355,14 +356,16 @@ valYearSel.addEventListener("change", drawValueChart);
 
 function drawValueChart() {
   const y = +valYearSel.value;
-  const rows = D.rows.filter(r => r.y === y && r.s > 0);
+  // Per-start basis: only players who actually started (rates undefined otherwise)
+  const rows = D.rows.filter(r => r.y === y && r.s > 0 && (ptsBasis !== "perstart" || r.sw > 0));
+  const dec = ptsBasis === "perstart" ? 2 : 1;
   const traces = Object.keys(PG_COLORS).filter(pg => rows.some(r => r.pg === pg)).map(pg => {
     const rs = rows.filter(r => r.pg === pg);
     return {
       x: rs.map(r => val(r.s, y)), y: rs.map(r => ptsOf(r)),
       mode: "markers", name: pg, marker: { color: PG_COLORS[pg], size: 7, opacity: 0.75 },
-      customdata: rs.map(r => [r.n, FR[r.f]?.current ?? r.f, r.s ? (ptsOf(r) / r.s).toFixed(1) : "—", r.sw]),
-      hovertemplate: `%{customdata[0]}<br>Salary: %{x:${fmt()}}${suffix()} · Points: %{y:.1f}<br>%{customdata[2]} pts/$ · %{customdata[3]} wks started · %{customdata[1]}<extra>${pg}</extra>`,
+      customdata: rs.map(r => [r.n, FR[r.f]?.current ?? r.f, r.s ? (ptsOf(r) / r.s).toFixed(dec) : "—", r.sw]),
+      hovertemplate: `%{customdata[0]}<br>Salary: %{x:${fmt()}}${suffix()} · ${ptsLabel()}: %{y:.${dec}f}<br>%{customdata[2]} pts/$ · %{customdata[3]} wks started · %{customdata[1]}<extra>${pg}</extra>`,
     };
   });
   Plotly.react("valueChart", traces, { ...layoutBase,
@@ -376,16 +379,17 @@ function drawPpdChart() {
   const traces = Object.keys(PG_COLORS).filter(pg => pg !== "Other").map(pg => ({
     x: yrs,
     y: yrs.map(y => {
-      // Starter basis: only count salary of players who actually started, so
-      // pts/$ reflects money spent on useful production
+      // Starter/per-start basis: only count salary of players who actually
+      // started, so pts/$ reflects money spent on useful production
       const rs = D.rows.filter(r => r.y === y && r.pg === pg && r.s > 0 && (ptsBasis === "all" || r.sw > 0));
       const sal = rs.reduce((a, r) => a + r.s, 0);
-      return sal > 0 ? rs.reduce((a, r) => a + ptsOf(r), 0) / sal : null;
+      const pts = rs.reduce((a, r) => a + (ptsBasis === "all" ? r.pts : r.spts), 0);
+      return sal > 0 ? pts / sal : null;
     }),
     mode: "lines+markers", name: pg, line: { color: PG_COLORS[pg] },
     hovertemplate: `%{x} ${pg}: %{y:.1f} pts/$<extra></extra>`,
   }));
-  Plotly.react("ppdChart", traces, { ...layoutBase, yaxis: { ...layoutBase.yaxis, title: `${ptsLabel()} per $`, rangemode: "tozero" } }, cfg);
+  Plotly.react("ppdChart", traces, { ...layoutBase, yaxis: { ...layoutBase.yaxis, title: ptsBasis === "all" ? "Points per $" : "Starter points per $", rangemode: "tozero" } }, cfg);
 }
 
 // ================= Lineup efficiency =================
